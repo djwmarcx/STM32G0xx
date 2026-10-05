@@ -52,7 +52,17 @@ void SystemClock_Config(void)
 
     HAL_PWREx_ControlVoltageScaling(PWR_REGULATOR_VOLTAGE_SCALE1);
 
-    /* HSE 8 MHz -> PLL -> 64 MHz SYSCLK */
+    /* The boot loader may leave the PLL running as SYSCLK, in which case
+       HAL_RCC_OscConfig() returns HAL_ERROR instead of reconfiguring it.
+       Fall back to HSI and stop the PLL so the setup below always applies. */
+    __HAL_RCC_HSI_ENABLE();
+    while(__HAL_RCC_GET_FLAG(RCC_FLAG_HSIRDY) == RESET);
+    MODIFY_REG(RCC->CFGR, RCC_CFGR_SW, RCC_SYSCLKSOURCE_HSI);
+    while(__HAL_RCC_GET_SYSCLK_SOURCE() != RCC_SYSCLKSOURCE_STATUS_HSI);
+    __HAL_RCC_PLL_DISABLE();
+    while(READ_BIT(RCC->CR, RCC_CR_PLLRDY) != 0U);
+
+    /* HSE 8 MHz -> /2 -> x48 = 192 MHz VCO -> R/3 = 64 MHz SYSCLK, Q/4 = 48 MHz USB */
     RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSE|RCC_OSCILLATORTYPE_HSI;
     RCC_OscInitStruct.HSEState = RCC_HSE_ON;
     RCC_OscInitStruct.HSIState = RCC_HSI_ON;
@@ -60,11 +70,11 @@ void SystemClock_Config(void)
     RCC_OscInitStruct.HSICalibrationValue = RCC_HSICALIBRATION_DEFAULT;
     RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
     RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSE;
-    RCC_OscInitStruct.PLL.PLLM = RCC_PLLM_DIV1;
-    RCC_OscInitStruct.PLL.PLLN = 16;                    // VCO = 8 * 16 = 128 MHz
+    RCC_OscInitStruct.PLL.PLLM = RCC_PLLM_DIV2;
+    RCC_OscInitStruct.PLL.PLLN = 48;
     RCC_OscInitStruct.PLL.PLLP = RCC_PLLP_DIV2;
-    RCC_OscInitStruct.PLL.PLLQ = RCC_PLLQ_DIV2;
-    RCC_OscInitStruct.PLL.PLLR = RCC_PLLR_DIV2;         // SYSCLK = 128 / 2 = 64 MHz
+    RCC_OscInitStruct.PLL.PLLQ = RCC_PLLQ_DIV4;
+    RCC_OscInitStruct.PLL.PLLR = RCC_PLLR_DIV3;
     if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
         Error_Handler();
 
@@ -78,34 +88,18 @@ void SystemClock_Config(void)
 
 #if USB_SERIAL_CDC
 
-    /* USB clock: HSI48 trimmed against USB SOF via CRS */
-
-    RCC_OscInitTypeDef HSI48_Init = {
-        .OscillatorType = RCC_OSCILLATORTYPE_HSI48,
-        .HSI48State = RCC_HSI48_ON,
-        .PLL.PLLState = RCC_PLL_NONE
-    };
-    if (HAL_RCC_OscConfig(&HSI48_Init) != HAL_OK)
-        Error_Handler();
+    /* USB clock: PLL Q output (48 MHz from the HSE crystal), as BTT's Klipper build does */
 
     RCC_PeriphCLKInitTypeDef PeriphClkInit = {
         .PeriphClockSelection = RCC_PERIPHCLK_USB,
-        .UsbClockSelection = RCC_USBCLKSOURCE_HSI48
+        .UsbClockSelection = RCC_USBCLKSOURCE_PLL
     };
     if (HAL_RCCEx_PeriphCLKConfig(&PeriphClkInit) != HAL_OK)
         Error_Handler();
 
-    __HAL_RCC_CRS_CLK_ENABLE();
-
-    RCC_CRSInitTypeDef CRS_Init = {
-        .Prescaler = RCC_CRS_SYNC_DIV1,
-        .Source = RCC_CRS_SYNC_SOURCE_USB,
-        .Polarity = RCC_CRS_SYNC_POLARITY_RISING,
-        .ReloadValue = RCC_CRS_RELOADVALUE_DEFAULT,
-        .ErrorLimitValue = RCC_CRS_ERRORLIMIT_DEFAULT,
-        .HSI48CalibrationValue = RCC_CRS_HSI48CALIBRATION_DEFAULT
-    };
-    HAL_RCCEx_CRSConfig(&CRS_Init);
+    /* Disable the UCPD dead battery pull-downs on the CC pins (as Klipper does) */
+    __HAL_RCC_SYSCFG_CLK_ENABLE();
+    SYSCFG->CFGR1 |= (SYSCFG_CFGR1_UCPD1_STROBE|SYSCFG_CFGR1_UCPD2_STROBE);
 
 #endif // USB_SERIAL_CDC
 }
