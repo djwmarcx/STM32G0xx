@@ -31,6 +31,30 @@
 
 static io_stream_t tmc_uart;
 
+static void trinamic_on_driver_preinit (
+    motor_map_t motor,
+    trinamic_driver_config_t *config)
+{
+    switch(motor.axis) {
+
+        case X_AXIS:
+            config->address = 0;
+            break;
+
+        case Y_AXIS:
+            config->address = 2;
+            break;
+
+        case Z_AXIS:
+            config->address = 1;
+            break;
+
+        default:
+            config->address = motor.id;
+            break;
+    }
+}
+
 TMC_uart_write_datagram_t *tmc_uart_read (trinamic_motor_t driver, TMC_uart_read_datagram_t *dgr)
 {
     static TMC_uart_write_datagram_t wdgr = {0};
@@ -78,6 +102,13 @@ void tmc_uart_write (trinamic_motor_t driver, TMC_uart_write_datagram_t *dgr)
 void board_init (void)
 {
     io_stream_t const *stream;
+
+    // Register board-specific Trinamic configuration
+    trinamic_driver_if_t trinamic_if = {
+        .on_driver_preinit = trinamic_on_driver_preinit
+    };
+
+    trinamic_if_init(&trinamic_if);
 
     if((stream = stream_open_instance(TRINAMIC_STREAM, 115200, NULL, "Trinamic UART")) == NULL)
         stream = stream_null_init(115200);
